@@ -14,7 +14,7 @@
 // limitations under the License.
 //
 
-use std::{io::Read, time::Duration};
+use std::{collections::BTreeMap, io::Read, ops::Deref, time::Duration};
 use anyhow::{anyhow, Result};
 use bytes::Bytes;
 use stof::{Library, SDoc, SNodeRef, SUnits, SVal};
@@ -54,23 +54,35 @@ impl Library for HTTPLibrary {
     /// - HTTP.delete
     ///
     /// Parameters (in order) for each call:
-    /// - url: str                 - The HTTP request path (REQUIRED)
-    /// - headers: vec[(str, str)] - The request headers (OPTIONAL)
-    /// - body: str | blob         - The request body (OPTIONAL)
-    /// - timeout: float | units   - The overall timeout for the request (OPTIONAL) (default 5 seconds - use time units as needed)
-    /// - response_obj: obj        - A response object to parse the response into via doc.header_import with the content type (OPTIONAL)
+    /// - url: str                       - The HTTP request path (REQUIRED)
+    /// - headers: vec[(str, str)] | map - The request headers (OPTIONAL)
+    /// - body: str | blob               - The request body (OPTIONAL)
+    /// - timeout: float | units         - The overall timeout for the request (OPTIONAL) (default 5 seconds - use time units as needed)
+    /// - response_obj: obj              - A response object to parse the response into via doc.header_import with the content type (OPTIONAL)
     ///
     /// Basic GET request: `HTTP.get('https://example.com')`
     ///
     /// POST request with a body: `HTTP.post('https://example.com', 'this is a string body to send')`
     ///
-    /// POST request json body and a timeout: `HTTP.post('https://example.com', [('content-type', 'application/json')], stringify(self, 'json'), 10s)`
+    /// POST request json body and a timeout: `HTTP.post('https://example.com', map(('content-type', 'application/json')), stringify(self, 'json'), 10s)`
     fn call(&self, pid: &str, doc: &mut SDoc, name: &str, parameters: &mut Vec<SVal>) -> Result<SVal> {
         let url;
         if parameters.len() > 0 {
             match &parameters[0] {
                 SVal::String(val) => {
                     url = val.clone();
+                },
+                SVal::Boxed(val) => {
+                    let val = val.lock().unwrap();
+                    let val = val.deref();
+                    match val {
+                        SVal::String(val) => {
+                            url = val.clone();
+                        },
+                        _ => {
+                            return Err(anyhow!("HTTP URL path parameter must be a string"));
+                        }
+                    }
                 },
                 _ => {
                     return Err(anyhow!("HTTP URL path parameter must be a string"));
@@ -112,6 +124,11 @@ impl Library for HTTPLibrary {
                         }
                     }
                 },
+                SVal::Map(map) => {
+                    for (k, v) in map {
+                        headers.push((k.to_string(), v.to_string()));
+                    }
+                },
                 SVal::String(body) => {
                     str_body = Some(body.clone());
                 },
@@ -124,6 +141,45 @@ impl Library for HTTPLibrary {
                 },
                 SVal::Object(nref) => {
                     response_obj = Some(nref.clone());
+                },
+                SVal::Boxed(val) => {
+                    let val = val.lock().unwrap();
+                    let val = val.deref();
+                    match val {
+                        SVal::Array(vals) => {
+                            for val in vals {
+                                match val {
+                                    SVal::Tuple(vals) => {
+                                        if vals.len() == 2 {
+                                            headers.push((vals[0].to_string(), vals[1].to_string()));
+                                        }
+                                    },
+                                    _ => {}
+                                }
+                            }
+                        },
+                        SVal::Map(map) => {
+                            for (k, v) in map {
+                                headers.push((k.to_string(), v.to_string()));
+                            }
+                        },
+                        SVal::String(body) => {
+                            str_body = Some(body.clone());
+                        },
+                        SVal::Blob(body) => {
+                            blob_body = Some(body.clone());
+                        },
+                        SVal::Number(num) => {
+                            let seconds = num.float_with_units(SUnits::Seconds);
+                            timeout = Duration::from_secs(seconds as u64);
+                        },
+                        SVal::Object(nref) => {
+                            response_obj = Some(nref.clone());
+                        },
+                        _ => {
+                            return Err(anyhow!("Second parameter for an HTTP request must be either headers (vec), a body (str | blob), a timeout (float | units), or response object (obj)"));
+                        }
+                    }
                 },
                 _ => {
                     return Err(anyhow!("Second parameter for an HTTP request must be either headers (vec), a body (str | blob), a timeout (float | units), or response object (obj)"));
@@ -145,6 +201,28 @@ impl Library for HTTPLibrary {
                 SVal::Object(nref) => {
                     response_obj = Some(nref.clone());
                 },
+                SVal::Boxed(val) => {
+                    let val = val.lock().unwrap();
+                    let val = val.deref();
+                    match val {
+                        SVal::String(body) => {
+                            str_body = Some(body.clone());
+                        },
+                        SVal::Blob(body) => {
+                            blob_body = Some(body.clone());
+                        },
+                        SVal::Number(num) => {
+                            let seconds = num.float_with_units(SUnits::Seconds);
+                            timeout = Duration::from_secs(seconds as u64);
+                        },
+                        SVal::Object(nref) => {
+                            response_obj = Some(nref.clone());
+                        },
+                        _ => {
+                            return Err(anyhow!("Third parameter for an HTTP request must be either a body (str | blob), a timeout (float | units), or a response object (obj)"));
+                        }
+                    }
+                },
                 _ => {
                     return Err(anyhow!("Third parameter for an HTTP request must be either a body (str | blob), a timeout (float | units), or a response object (obj)"));
                 }
@@ -159,6 +237,22 @@ impl Library for HTTPLibrary {
                 SVal::Object(nref) => {
                     response_obj = Some(nref.clone());
                 },
+                SVal::Boxed(val) => {
+                    let val = val.lock().unwrap();
+                    let val = val.deref();
+                    match val {
+                        SVal::Number(num) => {
+                            let seconds = num.float_with_units(SUnits::Seconds);
+                            timeout = Duration::from_secs(seconds as u64);
+                        },
+                        SVal::Object(nref) => {
+                            response_obj = Some(nref.clone());
+                        },
+                        _ => {
+                            return Err(anyhow!("Fourth parameter for an HTTP request must be a timeout (float | units) or a response object (obj)"));
+                        }
+                    }
+                },
                 _ => {
                     return Err(anyhow!("Fourth parameter for an HTTP request must be a timeout (float | units) or a response object (obj)"));
                 }
@@ -168,6 +262,18 @@ impl Library for HTTPLibrary {
             match &parameters[4] {
                 SVal::Object(nref) => {
                     response_obj = Some(nref.clone());
+                },
+                SVal::Boxed(val) => {
+                    let val = val.lock().unwrap();
+                    let val = val.deref();
+                    match val {
+                        SVal::Object(nref) => {
+                            response_obj = Some(nref.clone());
+                        },
+                        _ => {
+                            return Err(anyhow!("Fifth parameter for an HTTP request must be a response object (obj)"));
+                        }
+                    }
                 },
                 _ => {
                     return Err(anyhow!("Fifth parameter for an HTTP request must be a response object (obj)"));
@@ -193,10 +299,10 @@ impl Library for HTTPLibrary {
 
         // Get content type and headers from the response
         let content_type = response.content_type().to_owned();
-        let mut response_headers = Vec::new();
+        let mut response_headers = BTreeMap::new();
         for name in response.headers_names() {
             if let Some(value) = response.header(&name) {
-                response_headers.push(SVal::Tuple(vec![SVal::String(name), SVal::String(value.to_owned())]));
+                response_headers.insert(SVal::String(name), SVal::String(value.to_owned()));
             }
         }
 
@@ -217,7 +323,7 @@ impl Library for HTTPLibrary {
         }
 
         // Return the response content type, headers, and body
-        return Ok(SVal::Tuple(vec![SVal::String(content_type), SVal::Array(response_headers), SVal::Blob(buf)]));
+        return Ok(SVal::Tuple(vec![SVal::String(content_type), SVal::Map(response_headers), SVal::Blob(buf)]));
     }
 }
 

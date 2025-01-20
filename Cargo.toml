@@ -11,5 +11,5 @@ homepage = "https://docs.stof.dev"
 [dependencies]
 anyhow = "1.0.95"
 bytes = "1.9.0"
-stof = "0.2.4"
+stof = "0.2.9"
 ureq = "2.12.1"
