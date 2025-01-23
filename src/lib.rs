@@ -15,11 +15,11 @@
 //
 
 use std::{collections::BTreeMap, io::Read, ops::Deref, time::Duration};
-use anyhow::{anyhow, Result};
 use bytes::Bytes;
-use stof::{Library, SDoc, SNodeRef, SUnits, SVal};
+use stof::{lang::SError, Library, SDoc, SNodeRef, SUnits, SVal};
 use ureq::Agent;
 
+pub mod server;
 
 #[derive(Debug)]
 pub struct HTTPLibrary {
@@ -65,7 +65,7 @@ impl Library for HTTPLibrary {
     /// POST request with a body: `HTTP.post('https://example.com', 'this is a string body to send')`
     ///
     /// POST request json body and a timeout: `HTTP.post('https://example.com', map(('content-type', 'application/json')), stringify(self, 'json'), 10s)`
-    fn call(&self, pid: &str, doc: &mut SDoc, name: &str, parameters: &mut Vec<SVal>) -> Result<SVal> {
+    fn call(&self, pid: &str, doc: &mut SDoc, name: &str, parameters: &mut Vec<SVal>) -> Result<SVal, SError> {
         let url;
         if parameters.len() > 0 {
             match &parameters[0] {
@@ -80,16 +80,16 @@ impl Library for HTTPLibrary {
                             url = val.clone();
                         },
                         _ => {
-                            return Err(anyhow!("HTTP URL path parameter must be a string"));
+                            return Err(SError::custom(pid, &doc, "HTTPError", "url must be a string"));
                         }
                     }
                 },
                 _ => {
-                    return Err(anyhow!("HTTP URL path parameter must be a string"));
+                    return Err(SError::custom(pid, &doc, "HTTPError", "url must be a string"));
                 }
             }
         } else {
-            return Err(anyhow!("Must provide a URL path as the first parameter when calling the HTTP library"));
+            return Err(SError::custom(pid, &doc, "HTTPError", "must provide a URL as the first parameter when calling into the HTTP library"));
         }
 
         let mut request;
@@ -101,7 +101,7 @@ impl Library for HTTPLibrary {
             "put" => request = self.agent.put(&url),
             "delete" => request = self.agent.delete(&url),
             _ => {
-                return Err(anyhow!("Unrecognized HTTP function name '{}'", name));
+                return Err(SError::custom(pid, &doc, "HTTPError", &format!("unrecognized HTTP library function: {}", name)));
             }
         }
 
@@ -177,12 +177,12 @@ impl Library for HTTPLibrary {
                             response_obj = Some(nref.clone());
                         },
                         _ => {
-                            return Err(anyhow!("Second parameter for an HTTP request must be either headers (vec), a body (str | blob), a timeout (float | units), or response object (obj)"));
+                            return Err(SError::custom(pid, &doc, "HTTPError", "second parameter for an HTTP request must be either headers (vec), a body (str | blob), a timeout (float | units), or response object (obj)"));
                         }
                     }
                 },
                 _ => {
-                    return Err(anyhow!("Second parameter for an HTTP request must be either headers (vec), a body (str | blob), a timeout (float | units), or response object (obj)"));
+                    return Err(SError::custom(pid, &doc, "HTTPError", "second parameter for an HTTP request must be either headers (vec), a body (str | blob), a timeout (float | units), or response object (obj)"));
                 }
             }
         }
@@ -219,12 +219,12 @@ impl Library for HTTPLibrary {
                             response_obj = Some(nref.clone());
                         },
                         _ => {
-                            return Err(anyhow!("Third parameter for an HTTP request must be either a body (str | blob), a timeout (float | units), or a response object (obj)"));
+                            return Err(SError::custom(pid, &doc, "HTTPError", "third parameter for an HTTP request must be either a body (str | blob), a timeout (float | units), or a response object (obj)"));
                         }
                     }
                 },
                 _ => {
-                    return Err(anyhow!("Third parameter for an HTTP request must be either a body (str | blob), a timeout (float | units), or a response object (obj)"));
+                    return Err(SError::custom(pid, &doc, "HTTPError", "third parameter for an HTTP request must be either a body (str | blob), a timeout (float | units), or a response object (obj)"));
                 }
             }
         }
@@ -249,12 +249,12 @@ impl Library for HTTPLibrary {
                             response_obj = Some(nref.clone());
                         },
                         _ => {
-                            return Err(anyhow!("Fourth parameter for an HTTP request must be a timeout (float | units) or a response object (obj)"));
+                            return Err(SError::custom(pid, &doc, "HTTPError", "fourth parameter for an HTTP request must be a timeout (float | units) or a response object (obj)"));
                         }
                     }
                 },
                 _ => {
-                    return Err(anyhow!("Fourth parameter for an HTTP request must be a timeout (float | units) or a response object (obj)"));
+                    return Err(SError::custom(pid, &doc, "HTTPError", "fourth parameter for an HTTP request must be a timeout (float | units) or a response object (obj)"));
                 }
             }
         }
@@ -271,12 +271,12 @@ impl Library for HTTPLibrary {
                             response_obj = Some(nref.clone());
                         },
                         _ => {
-                            return Err(anyhow!("Fifth parameter for an HTTP request must be a response object (obj)"));
+                            return Err(SError::custom(pid, &doc, "HTTPError", "fifth parameter for an HTTP request must be a response object (obj)"));
                         }
                     }
                 },
                 _ => {
-                    return Err(anyhow!("Fifth parameter for an HTTP request must be a response object (obj)"));
+                    return Err(SError::custom(pid, &doc, "HTTPError", "fifth parameter for an HTTP request must be a response object (obj)"));
                 }
             }
         }
@@ -288,13 +288,18 @@ impl Library for HTTPLibrary {
         request = request.timeout(timeout);
         
         // Send with body or call without
-        let response;
+        let response_res;
         if let Some(body) = str_body {
-            response = request.send_string(&body)?;
+            response_res = request.send_string(&body);
         } else if let Some(body) = blob_body {
-            response = request.send_bytes(&body)?;
+            response_res = request.send_bytes(&body);
         } else {
-            response = request.call()?;
+            response_res = request.call();
+        }
+        let response;
+        match response_res {
+            Ok(res) => response = res,
+            Err(error) => return Err(SError::custom(pid, &doc, "HTTPError", &format!("error sending request: {}", error.to_string()))),
         }
 
         // Get content type and headers from the response
@@ -308,11 +313,14 @@ impl Library for HTTPLibrary {
 
         // Read response body into a blob
         let mut buf: Vec<u8> = vec![];
-        response.into_reader()
+        let res = response.into_reader()
             .take(((10 * 1_024 * 1_024) + 1) as u64)
-            .read_to_end(&mut buf)?;
+            .read_to_end(&mut buf);
+        if res.is_err() {
+            return Err(SError::custom(pid, &doc, "HTTPError", &format!("error reading response into buffer: {}", res.err().unwrap().to_string())));
+        }
         if buf.len() > (10 * 1_024 * 1_024) {
-            return Err(anyhow!("Response is too big"));
+            return Err(SError::custom(pid, &doc, "HTTPError", "response is too large to be read into a buffer"));
         }
 
         // Import the response into a response object if one was provided
