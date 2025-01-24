@@ -295,22 +295,20 @@ impl StofResponse {
                             } else {
                                 format = "json".to_owned();
                             }
-                            if format != "bstof" {
-                                if let Ok(result) = doc.export_string("main", &format, Some(nref)) {
-                                    str_body = result;
-                                    if let Some(format) = doc.formats.get(&format) {
-                                        headers.insert(CONTENT_TYPE, format.content_type().parse().unwrap());
-                                    }
-                                } else if let Ok(result) = doc.export_bytes("main", &format, Some(nref)) {
-                                    bytes_body = Some(result);
-                                    if let Some(format) = doc.formats.get(&format) {
-                                        headers.insert(CONTENT_TYPE, format.content_type().parse().unwrap());
-                                    }
-                                } else if let Ok(result) = doc.export_bytes("main", "bytes", Some(nref)) {
-                                    bytes_body = Some(result);
-                                    if let Some(format) = doc.formats.get("bytes") {
-                                        headers.insert(CONTENT_TYPE, format.content_type().parse().unwrap());
-                                    }
+                            if let Ok(result) = doc.export_string("main", &format, Some(nref)) {
+                                str_body = result;
+                                if let Some(format) = doc.formats.get(&format) {
+                                    headers.insert(CONTENT_TYPE, format.content_type().parse().unwrap());
+                                }
+                            } else if let Ok(result) = doc.export_bytes("main", &format, Some(nref)) {
+                                bytes_body = Some(result);
+                                if let Some(format) = doc.formats.get(&format) {
+                                    headers.insert(CONTENT_TYPE, format.content_type().parse().unwrap());
+                                }
+                            } else if let Ok(result) = doc.export_bytes("main", "bytes", Some(nref)) {
+                                bytes_body = Some(result);
+                                if let Some(format) = doc.formats.get("bytes") {
+                                    headers.insert(CONTENT_TYPE, format.content_type().parse().unwrap());
                                 }
                             }
                         },

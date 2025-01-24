@@ -1,6 +1,6 @@
 [package]
 name = "stof-http"
-version = "0.2.1"
+version = "0.2.2"
 edition = "2021"
 authors = ["CJ Cummings <cj@formata.io>"]
 description = "Stof is a unified data interface and interchange format for creating, sharing, and manipulating data. Stof removes the fragile and cumbersome parts of combining and using data in applications."
@@ -12,7 +12,8 @@ homepage = "https://docs.stof.dev"
 anyhow = "1.0.95"
 axum = "0.8.1"
 bytes = "1.9.0"
-stof = "0.2.10"
+nanoid = "0.4.0"
+stof = "0.2.12"
 tokio = { version = "1.43.0", features = ["full"] }
 tower-http = { version = "0.6.2", features = ["cors"] }
 tower_governor = "0.6.0"

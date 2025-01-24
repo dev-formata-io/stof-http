@@ -24,33 +24,30 @@ root Server: {
     }
 }
 
-{
-    "resourceType" : "Patient",
-    "id" : "example",
-    "active" : true,
-    "name" : [
-        {
-            "use" : "official",
-            "family" : "Chalmers",
-            "given" : ["Peter", "James"]
-
-            #[GET('names/official')]
-            fn officialName(): str {
-                trace('official name');
-                return self.given.join(" ") + " " + self.family;
-            }
-        },
-        {
-            "use" : "usual",
-            "given" : ["Jim"]
-        },
-        {
-            "use" : "maiden",
-            "family" : "Windsor",
-            "given" : ["Peter", "James"],
-            "period" : {
-                "end" : "2002"
-            }
+root Formata: {
+    type MyCustomInterface {
+        fn hello(): str {
+            return 'hello';
         }
-    ]
+    }
+}
+
+get: {
+    #[GET('interfaces/formata')]
+    #[cached({
+        self.formata_cached = blobify(Formata, 'bstof'); // this is cool
+        drop Formata;
+    })]
+    fn formata_interface(): str {
+        assertNull(Formata);
+        pln(self.formata_cached);
+
+        parse(self.formata_cached, 'bstof', 'self.Temp');
+        let object = new self.Temp.MyCustomInterface {};
+        pln(object.hello());
+        drop object;
+        drop self.Temp;
+
+        return 'success';
+    }
 }
