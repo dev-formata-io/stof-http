@@ -17,7 +17,7 @@
 use std::{collections::BTreeMap, net::SocketAddr, str::FromStr, sync::Arc, time::Duration};
 use anyhow::{anyhow, Result};
 use axum::{body::{Body, Bytes}, extract::{Path, Query, State}, http::{header::CONTENT_TYPE, HeaderMap, HeaderName, Method, StatusCode}, response::{IntoResponse, Response}, routing::get, Router};
-use stof::{IntoDataRef, SData, SDataRef, SDoc, SField, SFunc, SVal, FUNC_KIND};
+use stof::{IntoDataRef, SData, SDataRef, SDoc, SField, SFunc, SVal};
 use tokio::sync::Mutex;
 use tower_governor::{governor::GovernorConfig, GovernorLayer};
 use tower_http::cors::CorsLayer;
@@ -140,22 +140,20 @@ async fn internal_serve(mut doc: SDoc) {
     let mut delete_handlers = BTreeMap::new();
     let mut head_handlers = BTreeMap::new();
     let mut patch_handlers = BTreeMap::new();
-    for (id, dref) in &doc.graph.data.store {
-        if id.starts_with(FUNC_KIND) {
-            if let Ok(func) = dref.get_value::<SFunc>() {
-                if let Some(path) = func.attributes.get("GET") {
-                    get_handlers.insert(path.to_string(), dref.data_ref());
-                } else if let Some(path) = func.attributes.get("PUT") {
-                    put_handlers.insert(path.to_string(), dref.data_ref());
-                } else if let Some(path) = func.attributes.get("PATCH") {
-                    patch_handlers.insert(path.to_string(), dref.data_ref());
-                } else if let Some(path) = func.attributes.get("DELETE") {
-                    delete_handlers.insert(path.to_string(), dref.data_ref());
-                } else if let Some(path) = func.attributes.get("POST") {
-                    post_handlers.insert(path.to_string(), dref.data_ref());
-                } else if let Some(path) = func.attributes.get("HEAD") {
-                    head_handlers.insert(path.to_string(), dref.data_ref());
-                }
+    for (_, dref) in &doc.graph.data.store {
+        if let Some(func) = dref.get_data::<SFunc>() {
+            if let Some(path) = func.attributes.get("GET") {
+                get_handlers.insert(path.to_string(), dref.data_ref());
+            } else if let Some(path) = func.attributes.get("PUT") {
+                put_handlers.insert(path.to_string(), dref.data_ref());
+            } else if let Some(path) = func.attributes.get("PATCH") {
+                patch_handlers.insert(path.to_string(), dref.data_ref());
+            } else if let Some(path) = func.attributes.get("DELETE") {
+                delete_handlers.insert(path.to_string(), dref.data_ref());
+            } else if let Some(path) = func.attributes.get("POST") {
+                post_handlers.insert(path.to_string(), dref.data_ref());
+            } else if let Some(path) = func.attributes.get("HEAD") {
+                head_handlers.insert(path.to_string(), dref.data_ref());
             }
         }
     }
@@ -349,11 +347,13 @@ async fn request_handler(state: ServerState, path: String, query: BTreeMap<Strin
     let dref = state.handler(method, &path);
     let mut doc;
     let function;
+    let func_ref;
     match dref {
         Ok(dref) => {
             let tmp = state.doc.lock().await;
-            if let Ok(func) = SData::data::<SFunc>(&tmp.graph, dref) {
-                function = func;
+            if let Some(func) = SData::get::<SFunc>(&tmp.graph, &dref) {
+                function = func.clone();
+                func_ref = dref;
                 doc = tmp.clone();
             } else {
                 return StofResponse::error(StatusCode::NOT_FOUND, &format!("request handler not found at the path: {}", path));
@@ -405,7 +405,7 @@ async fn request_handler(state: ServerState, path: String, query: BTreeMap<Strin
             }
         }
     }
-    let response = doc.call(&function, parameters);
+    let response = SFunc::call_internal(&func_ref, "main", &mut doc, parameters, true, &function.params, &function.statements, &function.rtype);
     match response {
         Ok(response) => {
             StofResponse::val_response(&doc, response)
