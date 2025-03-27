@@ -16,7 +16,7 @@
 
 use std::{collections::BTreeMap, io::Read, ops::Deref, time::Duration};
 use bytes::Bytes;
-use stof::{lang::SError, Library, SDoc, SNodeRef, SUnits, SVal};
+use stof::{lang::SError, Library, SDoc, SNodeRef, SNum, SUnits, SVal};
 use ureq::Agent;
 
 pub mod server;
@@ -44,8 +44,15 @@ impl Library for HTTPLibrary {
     }
 
     /// Call an HTTP method in this library.
+    /// Returns (status code: int, headers: map, body: blob).
     ///
     /// Supported functions:
+    /// - HTTP.ok - check to see if a status code is OK (in range 200-299)
+    /// - HTTP.clientError - check to see if a status code is 400-499
+    /// - HTTP.serverError - check to see if a status code is 500-599
+    /// - HTTP.contentType - get content type from a header map
+    ///
+    /// - HTTP.send - must take an additional parameter at first (one of below methods).
     /// - HTTP.get
     /// - HTTP.head
     /// - HTTP.patch
@@ -66,6 +73,131 @@ impl Library for HTTPLibrary {
     ///
     /// POST request json body and a timeout: `HTTP.post('https://example.com', map(('content-type', 'application/json')), stringify(self, 'json'), 10s)`
     fn call(&self, pid: &str, doc: &mut SDoc, name: &str, parameters: &mut Vec<SVal>) -> Result<SVal, SError> {
+        // Helper functions first
+        let mut method = name.to_string();
+        match name {
+            "send" => {
+                if parameters.len() > 0 {
+                    let name = parameters.remove(0);
+                    method = name.owned_to_string();
+                }
+            },
+            "ok" => {
+                if parameters.len() > 0 {
+                    let code = parameters.pop().unwrap();
+                    match code {
+                        SVal::Number(num) => {
+                            let code = num.int();
+                            return Ok(SVal::Bool(code >= 200 && code < 300));
+                        },
+                        SVal::Boxed(val) => {
+                            let val = val.lock().unwrap();
+                            let val = val.deref();
+                            match val {
+                                SVal::Number(num) => {
+                                    let code = num.int();
+                                    return Ok(SVal::Bool(code >= 200 && code < 300));
+                                },
+                                _ => {
+                                    return Err(SError::custom(pid, &doc, "HTTPError", "cannot check a non-numerical status code"));
+                                }
+                            }
+                        },
+                        _ => {
+                            return Err(SError::custom(pid, &doc, "HTTPError", "cannot check a non-numerical status code"));
+                        }
+                    }
+                }
+            },
+            "clientError" => {
+                if parameters.len() > 0 {
+                    let code = parameters.pop().unwrap();
+                    match code {
+                        SVal::Number(num) => {
+                            let code = num.int();
+                            return Ok(SVal::Bool(code >= 400 && code < 500));
+                        },
+                        SVal::Boxed(val) => {
+                            let val = val.lock().unwrap();
+                            let val = val.deref();
+                            match val {
+                                SVal::Number(num) => {
+                                    let code = num.int();
+                                    return Ok(SVal::Bool(code >= 400 && code < 500));
+                                },
+                                _ => {
+                                    return Err(SError::custom(pid, &doc, "HTTPError", "cannot check a non-numerical status code"));
+                                }
+                            }
+                        },
+                        _ => {
+                            return Err(SError::custom(pid, &doc, "HTTPError", "cannot check a non-numerical status code"));
+                        }
+                    }
+                }
+            },
+            "serverError" => {
+                if parameters.len() > 0 {
+                    let code = parameters.pop().unwrap();
+                    match code {
+                        SVal::Number(num) => {
+                            let code = num.int();
+                            return Ok(SVal::Bool(code >= 500 && code < 600));
+                        },
+                        SVal::Boxed(val) => {
+                            let val = val.lock().unwrap();
+                            let val = val.deref();
+                            match val {
+                                SVal::Number(num) => {
+                                    let code = num.int();
+                                    return Ok(SVal::Bool(code >= 500 && code < 600));
+                                },
+                                _ => {
+                                    return Err(SError::custom(pid, &doc, "HTTPError", "cannot check a non-numerical status code"));
+                                }
+                            }
+                        },
+                        _ => {
+                            return Err(SError::custom(pid, &doc, "HTTPError", "cannot check a non-numerical status code"));
+                        }
+                    }
+                }
+            },
+            "contentType" => {
+                if parameters.len() > 0 {
+                    let headers = parameters.pop().unwrap();
+                    match headers {
+                        SVal::Map(map) => {
+                            if let Some(ctype) = map.get(&"Content-Type".into()) {
+                                return Ok(ctype.clone());
+                            } else if let Some(ctype) = map.get(&"content-type".into()) {
+                                return Ok(ctype.clone());
+                            }
+                            return Ok(SVal::Null); // no content type header found
+                        },
+                        SVal::Boxed(val) => {
+                            let val = val.lock().unwrap();
+                            let val = val.deref();
+                            match val {
+                                SVal::Map(map) => {
+                                    if let Some(ctype) = map.get(&"Content-Type".into()) {
+                                        return Ok(ctype.clone());
+                                    } else if let Some(ctype) = map.get(&"content-type".into()) {
+                                        return Ok(ctype.clone());
+                                    }
+                                    return Ok(SVal::Null); // no content type header found
+                                },
+                                _ => {}
+                            }
+                        },
+                        _ => {}
+                    }
+                    return Err(SError::custom(pid, &doc, "HTTPError", "cannot check a non map set of headers"));
+                }
+            },
+            _ => {}
+        }
+        
         let url;
         if parameters.len() > 0 {
             match &parameters[0] {
@@ -93,7 +225,7 @@ impl Library for HTTPLibrary {
         }
 
         let mut request;
-        match name {
+        match method.to_lowercase().as_str() {
             "get" => request = self.agent.get(&url),
             "head" => request = self.agent.head(&url),
             "patch" => request = self.agent.patch(&url),
@@ -101,7 +233,7 @@ impl Library for HTTPLibrary {
             "put" => request = self.agent.put(&url),
             "delete" => request = self.agent.delete(&url),
             _ => {
-                return Err(SError::custom(pid, &doc, "HTTPError", &format!("unrecognized HTTP library function: {}", name)));
+                return Err(SError::custom(pid, &doc, "HTTPError", &format!("unrecognized HTTP library function: {}", method)));
             }
         }
 
@@ -302,6 +434,9 @@ impl Library for HTTPLibrary {
             Err(error) => return Err(SError::custom(pid, &doc, "HTTPError", &format!("error sending request: {}", error.to_string()))),
         }
 
+        // Get the status of the response
+        let status = response.status();
+
         // Get content type and headers from the response
         let content_type = response.content_type().to_owned();
         let mut response_headers = BTreeMap::new();
@@ -330,8 +465,8 @@ impl Library for HTTPLibrary {
             doc.header_import(pid, &content_type, &content_type, &mut bytes, &as_name)?;
         }
 
-        // Return the response content type, headers, and body
-        return Ok(SVal::Tuple(vec![SVal::String(content_type), SVal::Map(response_headers), SVal::Blob(buf)]));
+        // Return the response status, headers, and body
+        return Ok(SVal::Tuple(vec![SVal::Number(SNum::I64(status as i64)), SVal::Map(response_headers), SVal::Blob(buf)]));
     }
 }
 
